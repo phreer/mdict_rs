@@ -48,7 +48,7 @@ async fn main() {
             match lookup {
                 Ok(data) => Ok(Response::builder()
                     .header("content-type", content_type.to_string())
-                    .body(data)
+                    .body(data.to_vec())
                     .unwrap()),
                 Err(e) => {
                     if e.kind() != std::io::ErrorKind::NotFound {

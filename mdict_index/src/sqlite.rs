@@ -10,7 +10,7 @@ use std::{
     fs::{self, OpenOptions},
     io,
 };
-use tokio::stream::StreamExt;
+use tokio_stream::StreamExt;
 
 const DB_INIT: &str = include_str!("../migration/init.sql");
 
@@ -110,7 +110,7 @@ impl MDictSqliteBuilder {
                 mdx_block.block_offset,
                 mdx_block.block_size
             )
-            .execute(&mut transaction)
+            .execute(&mut *transaction)
             .await?;
         }
         transaction.commit().await?;
@@ -134,7 +134,7 @@ impl MDictSqliteBuilder {
                 mdx_index.record_offset,
                 mdx_index.record_size
             )
-            .execute(&mut transaction)
+            .execute(&mut *transaction)
             .await?;
         }
         transaction.commit().await?;
@@ -162,7 +162,7 @@ impl MDictSqliteBuilder {
                     mdd_block.block_offset,
                     mdd_block.block_size
                 )
-                .execute(&mut transaction)
+                .execute(&mut *transaction)
                 .await?;
             }
         }
@@ -189,7 +189,7 @@ impl MDictSqliteBuilder {
                 mdd_index.record_offset,
                 mdd_index.record_size
             )
-            .execute(&mut transaction)
+            .execute(&mut *transaction)
             .await?;
         }
         transaction.commit().await?;

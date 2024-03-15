@@ -791,11 +791,11 @@ fn read_len<R: Read>(reader: &mut R, len: usize) -> io::Result<Vec<u8>> {
 }
 
 #[cfg(feature = "async")]
-use tokio::{io::AsyncSeek, prelude::*};
+use tokio::io::{AsyncSeek, AsyncRead, AsyncSeekExt, AsyncReadExt};
 
 #[cfg(feature = "async")]
 // read len bytes from this reader and return it as `Vec<u8>`
-async fn read_len_async<R: AsyncRead + Unpin>(reader: &mut R, len: usize) -> io::Result<Vec<u8>> {
+async fn read_len_async<R: AsyncReadExt + Unpin>(reader: &mut R, len: usize) -> io::Result<Vec<u8>> {
     let mut buf = Vec::with_capacity(len);
     reader.take(len as u64).read_to_end(&mut buf).await?;
     Ok(buf)
@@ -853,7 +853,7 @@ pub async fn lookup<AR>(
     block: &MDictRecordBlockIndex,
 ) -> io::Result<Bytes>
 where
-    AR: AsyncRead + AsyncSeek + Unpin,
+    AR: AsyncReadExt + AsyncSeekExt + Unpin,
 {
     reader.seek(io::SeekFrom::Start(block.offset)).await?;
     let compressed = read_len_async(&mut reader, block.comp_size as usize).await?;
