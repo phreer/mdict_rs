@@ -9,8 +9,9 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tokio::prelude::*;
+
 use warp::{filters::path::Tail, http::Response, Filter};
+use tokio::io::AsyncReadExt;
 
 const MDICT_JS: &str = include_str!("../static/mdict.js");
 
@@ -67,7 +68,7 @@ async fn main() {
                         }
                         Ok(Response::builder()
                             .header("content-type", mime.to_string())
-                            .body(data)
+                            .body(data.to_vec())
                             .unwrap())
                     }
                     Err(e) => {
@@ -107,7 +108,7 @@ async fn main() {
                     };
                     Ok(Response::builder()
                         .header("content-type", mime.to_string())
-                        .body(data)
+                        .body(data.to_vec())
                         .unwrap())
                 } else {
                     Err(warp::reject::not_found())
@@ -138,7 +139,7 @@ async fn main() {
                         if link[3].contains("data:") {
                             return link[0].to_string()
                         }
-                        match link.get(2){
+                        match link.get(2) {
                             Some(m) => {
                                 let proto = m.as_str();
                                 match proto {
@@ -170,7 +171,7 @@ async fn main() {
             Ok(warp::reply::html(body))
         },
     );
-    let routes = warp::get().and(mdict_server).or(files).or(lookup).with(log);
+    let routes = warp::get().and(files).or(mdict_server).or(lookup).with(log);
     warp::serve(routes).run(([0, 0, 0, 0], 8080)).await;
 }
 
