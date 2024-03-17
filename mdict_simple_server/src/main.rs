@@ -33,7 +33,7 @@ async fn main() {
                     let key = urlencoding::decode(path).unwrap();
                     let result = mdict.lookup_word(&key).await;
                     result.map(|opt| {
-                        let string = Regex::new("(entry|sound):/").unwrap().replace_all(&opt, "");
+                        let string = Regex::new("(entry|sound):/").unwrap().replace_all(&opt[0], "");
                         let string = Regex::new("@@@LINK=([\\w]+)").unwrap().replace_all(
                             &string,
                             |link: &regex::Captures| {

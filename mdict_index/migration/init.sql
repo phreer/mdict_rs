@@ -8,7 +8,8 @@ CREATE TABLE mdx_block (
     block_size bigint not null
 );
 CREATE TABLE mdx_index (
-    keyword text primary key not null,
+    id integer primary key not null,
+    keyword text not null,
     block_index integer not null,
     record_offset integer not null,
     record_size integer not null,
@@ -22,7 +23,8 @@ CREATE TABLE mdd_block (
     primary key (file_index, block_index)
 );
 CREATE TABLE mdd_index (
-    keyword text primary key not null,
+    id integer primary key not null,
+    keyword text not null,
     file_index integer not null,
     block_index integer not null,
     record_offset integer not null,

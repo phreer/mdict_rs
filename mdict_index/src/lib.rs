@@ -2,11 +2,88 @@ use bytes::Bytes;
 use log::*;
 use mdict::*;
 use patricia_tree::PatriciaMap;
-use std::{
-    fs::OpenOptions,
-    io,
-    path::{Path, PathBuf},
-};
+use std::{fs::OpenOptions, io, path::{Path, PathBuf}};
+
+enum MDictRecordIndices {
+    Index(MDictRecordIndex),
+    IndexVec(Vec<MDictRecordIndex>),
+}
+
+struct MDictRecordIndicesIntoIter {
+    inner: MDictRecordIndices,
+    cursor: usize,
+}
+
+struct MDictRecordIndicesIter<'a> {
+    inner: &'a MDictRecordIndices,
+    cursor: usize,
+}
+
+impl Iterator for MDictRecordIndicesIntoIter {
+    type Item = MDictRecordIndex;
+    fn next(&mut self) -> Option<Self::Item> {
+        match &self.inner {
+            MDictRecordIndices::IndexVec(v) => {
+                if self.cursor < v.len() {
+                    Some(v[self.cursor])
+                } else {
+                    None
+                }
+            },
+            MDictRecordIndices::Index(v) => {
+                if self.cursor == 0 {
+                    Some(*v)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+}
+
+impl<'a> Iterator for MDictRecordIndicesIter<'a> {
+    type Item = &'a MDictRecordIndex;
+    fn next(&mut self) -> Option<Self::Item> {
+        match &self.inner {
+            MDictRecordIndices::IndexVec(v) => {
+                if self.cursor < v.len() {
+                    Some(&v[self.cursor])
+                } else {
+                    None
+                }
+            },
+            MDictRecordIndices::Index(v) => {
+                if self.cursor == 0 {
+                    Some(v)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+}
+
+impl IntoIterator for MDictRecordIndices {
+    type Item = MDictRecordIndex;
+    type IntoIter = MDictRecordIndicesIntoIter;
+    fn into_iter(self) -> Self::IntoIter {
+        MDictRecordIndicesIntoIter {
+            inner: self,
+            cursor: 0,
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a MDictRecordIndices {
+    type Item = &'a MDictRecordIndex;
+    type IntoIter = MDictRecordIndicesIter<'a>;
+    fn into_iter(self) -> Self::IntoIter {
+        MDictRecordIndicesIter {
+            inner: self,
+            cursor: 0,
+        }
+    }
+}
 
 #[cfg(feature = "sqlite")]
 mod sqlite;
@@ -17,7 +94,7 @@ pub use sqlite::*;
 #[cfg(not(feature = "async"))]
 pub trait MDictLookup {
     fn word_exists(&self, key: &str) -> io::Result<bool>;
-    fn lookup_word(&self, key: &str) -> io::Result<String>;
+    fn lookup_word(&self, key: &str) -> io::Result<Vec<String>>;
     fn lookup_resource(&self, key: &str) -> io::Result<Bytes>;
 }
 
@@ -25,12 +102,12 @@ pub trait MDictLookup {
 #[async_trait]
 pub trait MDictAsyncLookup {
     async fn word_exists(&self, key: &str) -> io::Result<bool>;
-    async fn lookup_word(&self, key: &str) -> io::Result<String>;
+    async fn lookup_word(&self, key: &str) -> io::Result<Vec<String>>;
     async fn lookup_resource(&self, key: &str) -> io::Result<Bytes>;
 }
 
 pub struct MDictMemIndex {
-    mdx_index: PatriciaMap<MDictRecordIndex>,
+    mdx_index: PatriciaMap<MDictRecordIndices>,
     mdx_block: Vec<MDictRecordBlockIndex>,
     mdx_file: PathBuf,
     mdd_index: PatriciaMap<(u8, MDictRecordIndex)>,
@@ -77,7 +154,22 @@ impl MDictMemIndex {
         )?;
         let (mdx_block, mdx_keys) = mdx.make_index()?;
         let now = std::time::Instant::now();
-        let mdx_index = mdx_keys.into_iter().collect();
+        let mut mdx_index: PatriciaMap<MDictRecordIndices> = Default::default();
+        for (k, v) in mdx_keys.into_iter() {
+            match mdx_index.get_mut(&k) {
+                Some(record_offset) => match record_offset {
+                    MDictRecordIndices::Index(v0) => {
+                        *record_offset = MDictRecordIndices::IndexVec(vec![v, *v0]);
+                    },
+                    MDictRecordIndices::IndexVec(v0) => {
+                        v0.push(v);
+                    }
+                },
+                None => {
+                    mdx_index.insert(k, MDictRecordIndices::Index(v));
+                }
+            }
+        }
         info!("Build Patricia Map for mdx in {:?}", now.elapsed());
         let mut mdd_index = PatriciaMap::new();
         let mut mdd_blocks = Vec::new();
@@ -118,7 +210,7 @@ impl MDictLookup for MDictMemIndex {
     fn word_exists(&self, key: &str) -> io::Result<bool> {
         Ok(self.mdx_index.get(&key).is_some())
     }
-    fn lookup_word(&self, key: &str) -> io::Result<String> {
+    fn lookup_word(&self, key: &str) -> io::Result<Vec<String>> {
         match self.mdx_index.get(&key) {
             Some(idx) => {
                 let file = OpenOptions::new().read(true).open(&self.mdx_file)?;
@@ -163,17 +255,21 @@ impl MDictAsyncLookup for MDictMemIndex {
     async fn word_exists(&self, key: &str) -> io::Result<bool> {
         Ok(self.mdx_index.get(&key).is_some())
     }
-    async fn lookup_word(&self, key: &str) -> io::Result<String> {
+    async fn lookup_word(&self, key: &str) -> io::Result<Vec<String>> {
         match self.mdx_index.get(&key) {
             Some(idx) => {
-                let file: tokio::fs::File = tokio::fs::OpenOptions::new()
-                    .read(true)
-                    .open(&self.mdx_file)
-                    .await?;
-                let bytes = lookup(file, idx, &self.mdx_block[idx.block as usize]).await?;
-                let decoded = self.header.decode_string(bytes)?;
-                Ok(decoded)
-            }
+                let mut result = vec![];
+                for i in idx {
+                    let file: tokio::fs::File = tokio::fs::OpenOptions::new()
+                        .read(true)
+                        .open(&self.mdx_file)
+                        .await?;
+                    let bytes = lookup(file, i, &self.mdx_block[i.block as usize]).await?;
+                    let decoded = self.header.decode_string(bytes)?;
+                    result.push(decoded);
+                }
+                Ok(result)
+            },
             None => Err(io::Error::new(
                 io::ErrorKind::NotFound,
                 "Not found in index",

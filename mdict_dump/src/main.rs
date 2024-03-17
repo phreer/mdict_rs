@@ -46,7 +46,7 @@ async fn do_search(args: Vec<String>) {
     let mdx_file = Path::new(file).canonicalize().unwrap();
     let index = MDictMemIndex::new(mdx_file).unwrap();
     if let Some(result) = index.lookup_word(key).await.ok() {
-        println!("Content:\n{result}");
+        println!("Content:\n{result:?}");
     } else {
         println!("not found");
     }

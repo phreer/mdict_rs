@@ -5,6 +5,7 @@ use sqlx::sqlite::{
     SqliteConnectOptions, SqliteConnection, SqliteJournalMode, SqlitePool, SqlitePoolOptions,
 };
 use sqlx::{ConnectOptions, Connection, Executor};
+use std::iter;
 use std::path::{Path, PathBuf};
 use std::{
     fs::{self, OpenOptions},
@@ -34,6 +35,9 @@ struct MdxIndex {
 
 #[derive(sqlx::FromRow, Debug)]
 struct MdxQuery {
+    #[allow(unused)]
+    id: i32,
+    #[allow(unused)]
     keyword: String,
     block_index: i32,
     record_offset: i32,
@@ -59,6 +63,9 @@ struct MddIndex {
 
 #[derive(sqlx::FromRow, Debug)]
 struct MddQuery {
+    #[allow(unused)]
+    id: i32,
+    #[allow(unused)]
     keyword: String,
     file_index: i32,
     block_index: i32,
@@ -76,10 +83,10 @@ impl MDictSqliteBuilder {
         let now = std::time::Instant::now();
         let mut transaction = self.conn.begin().await?;
         transaction
-            .execute("CREATE UNIQUE INDEX mdx_key ON mdx_index (keyword)")
+            .execute("CREATE UNIQUE INDEX mdx_key ON mdx_index (id)")
             .await?;
         transaction
-            .execute("CREATE UNIQUE INDEX mdd_key ON mdd_index (keyword)")
+            .execute("CREATE UNIQUE INDEX mdd_key ON mdd_index (id)")
             .await?;
         transaction
             .execute(
@@ -117,7 +124,9 @@ impl MDictSqliteBuilder {
         info!("Build mdx block index in {:?}", now.elapsed());
         let mut transaction = self.conn.begin().await?;
         let now = std::time::Instant::now();
-        for (k, v) in self.index.mdx_index.iter() {
+        for (k, v) in self.index.mdx_index.iter().flat_map(|(k, v)| {
+            iter::repeat(k).zip(v.into_iter())
+        }) {
             let mdx_index = MdxIndex {
                 keyword: String::from_utf8(k).unwrap(),
                 block_index: v.block as i32,
@@ -336,36 +345,40 @@ impl MDictAsyncLookup for MDictSqliteIndex {
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         Ok(query.is_some())
     }
-    async fn lookup_word(&self, key: &str) -> io::Result<String> {
-        let query: Option<MdxQuery> =
+    async fn lookup_word(&self, key: &str) -> io::Result<Vec<String>> {
+        let query: Vec<MdxQuery> =
             sqlx::query_as("select * from mdx_index natural join mdx_block where keyword = ?1")
                 .bind(key)
-                .fetch_optional(&self.pool)
+                .fetch_all(&self.pool)
                 .await
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-        match query {
-            Some(result) => {
-                let file: tokio::fs::File = tokio::fs::OpenOptions::new()
-                    .read(true)
-                    .open(&self.mdx_file)
-                    .await?;
-                let key = MDictRecordIndex {
-                    block: result.block_index as u32,
-                    offset: result.record_offset as u32,
-                    len: result.record_size as u32,
-                };
-                let block = MDictRecordBlockIndex {
-                    offset: result.block_offset as u64,
-                    comp_size: result.block_size as u64,
-                };
-                let bytes = lookup(file, &key, &block).await?;
-                let decoded = self.header.decode_string(bytes)?;
-                Ok(decoded)
-            }
-            None => Err(io::Error::new(
+        match query.len() {
+            0 => Err(io::Error::new(
                 io::ErrorKind::NotFound,
                 "Not found in index",
             )),
+            _ => {
+                let mut result = vec![];
+                for idx in query {
+                    let file: tokio::fs::File = tokio::fs::OpenOptions::new()
+                        .read(true)
+                        .open(&self.mdx_file)
+                        .await?;
+                    let key = MDictRecordIndex {
+                        block: idx.block_index as u32,
+                        offset: idx.record_offset as u32,
+                        len: idx.record_size as u32,
+                    };
+                    let block = MDictRecordBlockIndex {
+                        offset: idx.block_offset as u64,
+                        comp_size: idx.block_size as u64,
+                    };
+                    let bytes = lookup(file, &key, &block).await?;
+                    let decoded = self.header.decode_string(bytes)?;
+                    result.push(decoded);
+                }
+                Ok(result)
+            }
         }
     }
 

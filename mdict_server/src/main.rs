@@ -15,6 +15,36 @@ use tokio::io::AsyncReadExt;
 
 const MDICT_JS: &str = include_str!("../static/mdict.js");
 
+fn fix_content(content: String, i: usize) -> String {
+    let content = Regex::new(r#"(src|href)\s*=\s*"(file://|sound:/|entry:/)?/?([^"]+)""#)
+        .unwrap()
+        .replace_all(&content, |link: &regex::Captures| {
+            if link[3].contains("data:") {
+                return link[0].to_string()
+            }
+            match link.get(2) {
+                Some(m) => {
+                    let proto = m.as_str();
+                    match proto {
+                        "sound:/" => format!(r#"{}="sound://{}/{}""#,&link[1], i, &link[3]),
+                        "entry:/" => format!(r#"{}="/{}""#,&link[1], &link[3]),
+                        _ =>format!(r#"{}="/{}/{}""#,&link[1], i, &link[3])
+                    }
+                }
+                None => format!(r#"{}="/{}/{}""#,&link[1], i, &link[3])
+            }
+        });
+    let content = Regex::new("@@@LINK=([\\w\\s]+)")
+        .unwrap()
+        .replace_all(&content, |link: &regex::Captures| {
+            format!(
+                "<a href=\"/{}\" >See also: {}</a>",
+                &link[1], &link[1]
+            )
+        });
+    content.into()
+}
+
 #[tokio::main]
 async fn main() {
     let config_path = env::args().nth(1).unwrap().to_owned();
@@ -121,9 +151,9 @@ async fn main() {
             log::info!("lookup: {:?}", key);
             let mut body = format!(r#"<!DOCTYPE html><html><head><meta charset="utf-8"><title>{}</title></head><body>"#, keyword);
             let mut no_result = true;
-            for (i,dict) in mdict.iter().enumerate() {
+            for (i, dict) in mdict.iter().enumerate() {
                 let result = dict.lookup_word(&key).await;
-                let content = match result {
+                let contents = match result {
                     Ok(result) => result,
                     Err(e) => {
                         if e.kind() != std::io::ErrorKind::NotFound {
@@ -133,34 +163,8 @@ async fn main() {
                     },
                 };
                 no_result = false;
-                let content = Regex::new(r#"(src|href)\s*=\s*"(file://|sound:/|entry:/)?/?([^"]+)""#)
-                    .unwrap()
-                    .replace_all(&content, |link: &regex::Captures| {
-                        if link[3].contains("data:") {
-                            return link[0].to_string()
-                        }
-                        match link.get(2) {
-                            Some(m) => {
-                                let proto = m.as_str();
-                                match proto {
-                                    "sound:/" => format!(r#"{}="sound://{}/{}""#,&link[1], i, &link[3]),
-                                    "entry:/" => format!(r#"{}="/{}""#,&link[1], &link[3]),
-                                    _ =>format!(r#"{}="/{}/{}""#,&link[1], i, &link[3])
-                                }
-                            }
-                            None => format!(r#"{}="/{}/{}""#,&link[1], i, &link[3])
-                        }
-                    });
-                let content = Regex::new("@@@LINK=([\\w\\s]+)").unwrap().replace_all(
-                    &content,
-                    |link: &regex::Captures| {
-                        format!(
-                            "<a href=\"/{}\" >See also: {}</a>",
-                            &link[1], &link[1]
-                        )
-                    },
-                );
-                write!(body, r#"<div id="mdict_rs_{}">{}</div>"#,i,content).unwrap();
+                let content = contents.into_iter().map(|s| fix_content(s, i) ).reduce(|r, e| r + "================" + &e ).unwrap();
+                write!(body, r#"<div id="mdict_rs_{}">{}</div>"#, i, content).unwrap();
             }
             if no_result {
                 return Err(warp::reject::not_found())
