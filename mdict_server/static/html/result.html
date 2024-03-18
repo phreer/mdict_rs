@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>portrait</title>
+</head>
+
+<body>
+  {{ for dict_content in mdict_contents }}
+  <div id="mdict_rs_{ @index }">
+    {{ for content in dict_content.contents }}
+    <div id="mdict_rs_sub_{ @index }">
+      {content}
+    </div>
+    {{ endfor }}
+  </div>
+  {{ endfor }}
+</body>

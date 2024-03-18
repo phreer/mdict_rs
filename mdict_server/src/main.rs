@@ -9,11 +9,25 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-
+use serde::Serialize;
+use tinytemplate::TinyTemplate;
 use warp::{filters::path::Tail, http::Response, Filter};
 use tokio::io::AsyncReadExt;
 
 const MDICT_JS: &str = include_str!("../static/mdict.js");
+static MDICT_RESULT_HTML: &'static str = include_str!("../static/html/result.html");
+
+#[derive(Serialize)]
+struct MDictContent {
+    title: String,
+    index: usize,
+    contents: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct MDictContents {
+    mdict_contents: Vec<MDictContent>,
+}
 
 fn fix_content(content: String, i: usize) -> String {
     let content = Regex::new(r#"(src|href)\s*=\s*"(file://|sound:/|entry:/)?/?([^"]+)""#)
@@ -145,36 +159,48 @@ async fn main() {
                 }
             },
         );
-    let lookup = warp::path::param().and( warp::path::end()).and(indexes_shared2).and_then(
-        |keyword: String, mdict: Arc<Vec<MDictSqliteIndex>>| async move {
-            let key = urlencoding::decode(&keyword).unwrap();
-            log::info!("lookup: {:?}", key);
-            let mut body = format!(r#"<!DOCTYPE html><html><head><meta charset="utf-8"><title>{}</title></head><body>"#, keyword);
-            let mut no_result = true;
-            for (i, dict) in mdict.iter().enumerate() {
-                let result = dict.lookup_word(&key).await;
-                let contents = match result {
-                    Ok(result) => result,
-                    Err(e) => {
-                        if e.kind() != std::io::ErrorKind::NotFound {
-                            log::error!("lookup {} failed : {}", key, e);
-                        }
-                        continue;
-                    },
-                };
-                no_result = false;
-                let content = contents.into_iter().map(|s| fix_content(s, i) ).reduce(|r, e| r + "================" + &e ).unwrap();
-                write!(body, r#"<div id="mdict_rs_{}">{}</div>"#, i, content).unwrap();
-            }
-            if no_result {
-                return Err(warp::reject::not_found())
-            }
-            body.push_str(r#"</body><script>"#);
-            body.push_str(MDICT_JS);
-            body.push_str(r#"</script></html>"#);
-            Ok(warp::reply::html(body))
-        },
-    );
+    let lookup = warp::path::param()
+        .and(warp::path::end())
+        .and(indexes_shared2)
+        .and_then(
+            |keyword: String, mdict: Arc<Vec<MDictSqliteIndex>>| async move {
+                let key = urlencoding::decode(&keyword).unwrap();
+                log::info!("lookup: {:?}", key);
+                let mut no_result = true;
+                let mut mdict_contents = Vec::new();
+                for (i, dict) in mdict.iter().enumerate() {
+                    let result = dict.lookup_word(&key).await;
+                    let contents = match result {
+                        Ok(result) => result,
+                        Err(e) => {
+                            if e.kind() != std::io::ErrorKind::NotFound {
+                                log::error!("lookup {} failed : {}", key, e);
+                            }
+                            continue;
+                        },
+                    };
+                    no_result = false;
+                    let contents = contents.into_iter().map(|s| fix_content(s, i) ).collect();
+                    mdict_contents.push(MDictContent{
+                        title: format!("dict{}", i),
+                        index: i,
+                        contents
+                    });
+                }
+                let mdict_contents = MDictContents { mdict_contents };
+                let mut tt = TinyTemplate::new();
+                tt.set_default_formatter(&tinytemplate::format_unescaped);
+                tt.add_template("result", MDICT_RESULT_HTML).expect("failed to add template for result");
+                let mut body = format!("{}", tt.render("result", &mdict_contents).unwrap());
+                if no_result {
+                    return Err(warp::reject::not_found())
+                }
+                body.push_str(r#"</body><script>"#);
+                body.push_str(MDICT_JS);
+                body.push_str(r#"</script></html>"#);
+                Ok(warp::reply::html(body))
+            },
+        );
     let routes = warp::get().and(files).or(mdict_server).or(lookup).with(log);
     warp::serve(routes).run(([0, 0, 0, 0], 8080)).await;
 }
