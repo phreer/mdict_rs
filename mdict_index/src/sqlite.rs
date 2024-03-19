@@ -278,7 +278,7 @@ pub struct MDictSqliteIndex {
     pool: SqlitePool,
     mdx_file: PathBuf,
     mdd_files: Vec<PathBuf>,
-    header: MDictHeader,
+    pub header: MDictHeader,
 }
 
 impl MDictSqliteIndex {
