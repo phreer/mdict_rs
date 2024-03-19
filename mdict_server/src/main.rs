@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use log::info;
 use mdict_index::{MDictAsyncLookup, MDictSqliteIndex};
 use regex::Regex;
 use std::{
@@ -14,7 +15,6 @@ use tinytemplate::TinyTemplate;
 use warp::{filters::path::Tail, http::Response, Filter};
 use tokio::io::AsyncReadExt;
 
-const MDICT_JS: &str = include_str!("../static/mdict.js");
 static MDICT_RESULT_HTML: &'static str = include_str!("../static/html/result.html");
 
 #[derive(Serialize)]
@@ -159,6 +159,32 @@ async fn main() {
                 }
             },
         );
+    let static_files = warp::path::path("static")
+        .and(warp::path::tail())
+        .and(warp::path::end())
+        .and_then(
+            |uri: Tail| async move {
+                let file_path = std::path::PathBuf::from("static/".to_string() + uri.as_str());
+                if file_path.exists() {
+                    log::info!("load: {:?}", file_path);
+                    let mut file = tokio::fs::File::open(&file_path)
+                        .await
+                        .map_err(|_| warp::reject::not_found())?;
+                    let mut data = Vec::new();
+                    file.read_to_end(&mut data)
+                        .await
+                        .map_err(|_| warp::reject::not_found())?;
+                    let mime = mime_guess::from_path(file_path).first();
+                    let mime = mime.unwrap_or(mime::TEXT_HTML_UTF_8);
+                    Ok(Response::builder().
+                        header("content-type", mime.to_string())
+                        .body(data.to_vec())
+                        .unwrap())
+                } else {
+                    Err(warp::reject::not_found())
+                }
+            },
+        );
     let lookup = warp::path::param()
         .and(warp::path::end())
         .and(indexes_shared2)
@@ -182,7 +208,7 @@ async fn main() {
                     no_result = false;
                     let contents = contents.into_iter().map(|s| fix_content(s, i) ).collect();
                     mdict_contents.push(MDictContent{
-                        title: format!("dict{}", i),
+                        title: dict.header.attrs.get("Title").unwrap_or(&"Unknown dictionary".to_string()).to_owned(),
                         index: i,
                         contents
                     });
@@ -191,17 +217,14 @@ async fn main() {
                 let mut tt = TinyTemplate::new();
                 tt.set_default_formatter(&tinytemplate::format_unescaped);
                 tt.add_template("result", MDICT_RESULT_HTML).expect("failed to add template for result");
-                let mut body = format!("{}", tt.render("result", &mdict_contents).unwrap());
+                let body = format!("{}", tt.render("result", &mdict_contents).unwrap());
                 if no_result {
                     return Err(warp::reject::not_found())
                 }
-                body.push_str(r#"</body><script>"#);
-                body.push_str(MDICT_JS);
-                body.push_str(r#"</script></html>"#);
                 Ok(warp::reply::html(body))
             },
         );
-    let routes = warp::get().and(files).or(mdict_server).or(lookup).with(log);
+    let routes = warp::get().and(files).or(static_files).or(mdict_server).or(lookup).with(log);
     warp::serve(routes).run(([0, 0, 0, 0], 8080)).await;
 }
 
