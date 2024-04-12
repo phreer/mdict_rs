@@ -22,16 +22,18 @@ struct MDictRecordIndicesIter<'a> {
 impl Iterator for MDictRecordIndicesIntoIter {
     type Item = MDictRecordIndex;
     fn next(&mut self) -> Option<Self::Item> {
+        let cursor = self.cursor;
+        self.cursor += 1;
         match &self.inner {
             MDictRecordIndices::IndexVec(v) => {
-                if self.cursor < v.len() {
-                    Some(v[self.cursor])
+                if cursor < v.len() {
+                    Some(v[cursor])
                 } else {
                     None
                 }
             },
             MDictRecordIndices::Index(v) => {
-                if self.cursor == 0 {
+                if cursor == 0 {
                     Some(*v)
                 } else {
                     None
@@ -44,16 +46,18 @@ impl Iterator for MDictRecordIndicesIntoIter {
 impl<'a> Iterator for MDictRecordIndicesIter<'a> {
     type Item = &'a MDictRecordIndex;
     fn next(&mut self) -> Option<Self::Item> {
+        let cursor = self.cursor;
+        self.cursor += 1;
         match &self.inner {
             MDictRecordIndices::IndexVec(v) => {
-                if self.cursor < v.len() {
-                    Some(&v[self.cursor])
+                if cursor < v.len() {
+                    Some(&v[cursor])
                 } else {
                     None
                 }
             },
             MDictRecordIndices::Index(v) => {
-                if self.cursor == 0 {
+                if cursor == 0 {
                     Some(v)
                 } else {
                     None
