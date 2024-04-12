@@ -1,14 +1,8 @@
 use bytes::Bytes;
-use log::info;
 use mdict_index::{MDictAsyncLookup, MDictSqliteIndex};
 use regex::Regex;
 use std::{
-    env,
-    fmt::Write,
-    fs::File,
-    io::Read,
-    path::{Path, PathBuf},
-    sync::Arc,
+    env, fmt::Write as _, fs::File, io::{stderr, Read, Write}, path::{Path, PathBuf}, sync::Arc
 };
 use serde::Serialize;
 use tinytemplate::TinyTemplate;
@@ -16,6 +10,11 @@ use warp::{filters::path::Tail, http::Response, Filter};
 use tokio::io::AsyncReadExt;
 
 static MDICT_RESULT_HTML: &'static str = include_str!("../static/html/result.html");
+
+fn usage(program: &str) {
+    let usage = format!("Usage: {} config-file port\n", program);
+    stderr().write(usage.as_bytes()).unwrap();
+}
 
 #[derive(Serialize)]
 struct MDictContent {
@@ -61,9 +60,21 @@ fn fix_content(content: String, i: usize) -> String {
 
 #[tokio::main]
 async fn main() {
-    let config_path = env::args().nth(1).unwrap().to_owned();
+    let arg0 = env::args().nth(0).unwrap();
+    let config_path = env::args().nth(1).unwrap_or_else(|| {
+        usage(&arg0);
+        std::process::exit(-1);
+        #[allow(unreachable_code)]
+        "".to_string()
+    }).to_owned();
     let mut config_file = File::open(&config_path).unwrap();
     let mut config = String::new();
+    let server_port = env::args().nth(2).unwrap_or_else(|| {
+        usage(&arg0);
+        std::process::exit(-1);
+        #[allow(unreachable_code)]
+        "".to_string()
+    }).parse::<u16>().expect("invalid argument for port");
     config_file.read_to_string(&mut config).unwrap();
     if env::var_os("RUST_LOG").is_none() {
         env::set_var(
@@ -225,7 +236,7 @@ async fn main() {
             },
         );
     let routes = warp::get().and(files).or(static_files).or(mdict_server).or(lookup).with(log);
-    warp::serve(routes).run(([0, 0, 0, 0], 8080)).await;
+    warp::serve(routes).run(([0, 0, 0, 0], server_port)).await;
 }
 
 // from flask-mdict
