@@ -20,14 +20,14 @@ use std::env;
 use std::process::exit;
 
 fn usage(program: &str) {
-    let USAGE = format!("\
+    let usage = format!("\
     Usage: {} command args\n\
     \n\
     Available commands:\n\
     \tkey:       print all keys\n\
     \tsearch:    search and dump the content of a key\n\
     ", program);
-    stderr().write(USAGE.as_bytes()).unwrap();
+    stderr().write(usage.as_bytes()).unwrap();
 }
 
 fn do_keys(args: Vec<String>) {
