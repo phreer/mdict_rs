@@ -47,12 +47,12 @@ fn fix_content(content: String, i: usize) -> String {
                 None => format!(r#"{}="/{}/{}""#,&link[1], i, &link[3])
             }
         });
-    let content = Regex::new("@@@LINK=([\\w\\s]+)")
+    let content = Regex::new("@@@LINK=([^\\s]+)")
         .unwrap()
         .replace_all(&content, |link: &regex::Captures| {
             format!(
                 "<a href=\"/{}\" >See also: {}</a>",
-                &link[1], &link[1]
+                urlencoding::encode(&link[1]), &link[1]
             )
         });
     content.into()
