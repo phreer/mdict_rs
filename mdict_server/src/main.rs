@@ -2,23 +2,79 @@ use bytes::Bytes;
 use mdict_index::{MDictAsyncLookup, MDictSqliteIndex};
 use regex::Regex;
 use std::{
-    env,
-    fmt::Write,
-    fs::File,
-    io::Read,
-    path::{Path, PathBuf},
-    sync::Arc,
+    env, fmt::Write as _, fs::File, io::{stderr, Read, Write}, path::{Path, PathBuf}, sync::Arc
 };
-use tokio::prelude::*;
+use serde::Serialize;
+use tinytemplate::TinyTemplate;
 use warp::{filters::path::Tail, http::Response, Filter};
+use tokio::io::AsyncReadExt;
 
-const MDICT_JS: &str = include_str!("../static/mdict.js");
+static MDICT_RESULT_HTML: &'static str = include_str!("../static/html/result.html");
+
+fn usage(program: &str) {
+    let usage = format!("Usage: {} config-file port\n", program);
+    stderr().write(usage.as_bytes()).unwrap();
+}
+
+#[derive(Serialize)]
+struct MDictContent {
+    title: String,
+    index: usize,
+    contents: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct MDictContents {
+    mdict_contents: Vec<MDictContent>,
+}
+
+fn fix_content(content: String, i: usize) -> String {
+    let content = Regex::new(r#"(src|href)\s*=\s*"(file://|sound:/|entry:/)?/?([^"]+)""#)
+        .unwrap()
+        .replace_all(&content, |link: &regex::Captures| {
+            if link[3].contains("data:") {
+                return link[0].to_string()
+            }
+            match link.get(2) {
+                Some(m) => {
+                    let proto = m.as_str();
+                    match proto {
+                        "sound:/" => format!(r#"{}="sound://{}/{}""#,&link[1], i, &link[3]),
+                        "entry:/" => format!(r#"{}="/{}""#,&link[1], &link[3]),
+                        _ =>format!(r#"{}="/{}/{}""#,&link[1], i, &link[3])
+                    }
+                }
+                None => format!(r#"{}="/{}/{}""#,&link[1], i, &link[3])
+            }
+        });
+    let content = Regex::new("@@@LINK=([\\w\\s]+)")
+        .unwrap()
+        .replace_all(&content, |link: &regex::Captures| {
+            format!(
+                "<a href=\"/{}\" >See also: {}</a>",
+                &link[1], &link[1]
+            )
+        });
+    content.into()
+}
 
 #[tokio::main]
 async fn main() {
-    let config_path = env::args().nth(1).unwrap().to_owned();
+    let arg0 = env::args().nth(0).unwrap();
+    let config_path = env::args().nth(1).unwrap_or_else(|| {
+        usage(&arg0);
+        std::process::exit(-1);
+        #[allow(unreachable_code)]
+        "".to_string()
+    }).to_owned();
     let mut config_file = File::open(&config_path).unwrap();
     let mut config = String::new();
+    let server_port = env::args().nth(2).unwrap_or_else(|| {
+        usage(&arg0);
+        std::process::exit(-1);
+        #[allow(unreachable_code)]
+        "".to_string()
+    }).parse::<u16>().expect("invalid argument for port");
     config_file.read_to_string(&mut config).unwrap();
     if env::var_os("RUST_LOG").is_none() {
         env::set_var(
@@ -67,7 +123,7 @@ async fn main() {
                         }
                         Ok(Response::builder()
                             .header("content-type", mime.to_string())
-                            .body(data)
+                            .body(data.to_vec())
                             .unwrap())
                     }
                     Err(e) => {
@@ -107,71 +163,80 @@ async fn main() {
                     };
                     Ok(Response::builder()
                         .header("content-type", mime.to_string())
-                        .body(data)
+                        .body(data.to_vec())
                         .unwrap())
                 } else {
                     Err(warp::reject::not_found())
                 }
             },
         );
-    let lookup = warp::path::param().and( warp::path::end()).and(indexes_shared2).and_then(
-        |keyword: String, mdict: Arc<Vec<MDictSqliteIndex>>| async move {
-            let key = urlencoding::decode(&keyword).unwrap();
-            log::info!("lookup: {:?}", key);
-            let mut body = format!(r#"<!DOCTYPE html><html><head><meta charset="utf-8"><title>{}</title></head><body>"#, keyword);
-            let mut no_result = true;
-            for (i,dict) in mdict.iter().enumerate() {
-                let result = dict.lookup_word(&key).await;
-                let content = match result {
-                    Ok(result) => result,
-                    Err(e) => {
-                        if e.kind() != std::io::ErrorKind::NotFound {
-                            log::error!("lookup {} failed : {}", key, e);
-                        }
-                        continue;
-                    },
-                };
-                no_result = false;
-                let content = Regex::new(r#"(src|href)\s*=\s*"(file://|sound:/|entry:/)?/?([^"]+)""#)
-                    .unwrap()
-                    .replace_all(&content, |link: &regex::Captures| {
-                        if link[3].contains("data:") {
-                            return link[0].to_string()
-                        }
-                        match link.get(2){
-                            Some(m) => {
-                                let proto = m.as_str();
-                                match proto {
-                                    "sound:/" => format!(r#"{}="sound://{}/{}""#,&link[1], i, &link[3]),
-                                    "entry:/" => format!(r#"{}="/{}""#,&link[1], &link[3]),
-                                    _ =>format!(r#"{}="/{}/{}""#,&link[1], i, &link[3])
-                                }
+    let static_files = warp::path::path("static")
+        .and(warp::path::tail())
+        .and(warp::path::end())
+        .and_then(
+            |uri: Tail| async move {
+                let file_path = std::path::PathBuf::from("static/".to_string() + uri.as_str());
+                if file_path.exists() {
+                    log::info!("load: {:?}", file_path);
+                    let mut file = tokio::fs::File::open(&file_path)
+                        .await
+                        .map_err(|_| warp::reject::not_found())?;
+                    let mut data = Vec::new();
+                    file.read_to_end(&mut data)
+                        .await
+                        .map_err(|_| warp::reject::not_found())?;
+                    let mime = mime_guess::from_path(file_path).first();
+                    let mime = mime.unwrap_or(mime::TEXT_HTML_UTF_8);
+                    Ok(Response::builder().
+                        header("content-type", mime.to_string())
+                        .body(data.to_vec())
+                        .unwrap())
+                } else {
+                    Err(warp::reject::not_found())
+                }
+            },
+        );
+    let lookup = warp::path::param()
+        .and(warp::path::end())
+        .and(indexes_shared2)
+        .and_then(
+            |keyword: String, mdict: Arc<Vec<MDictSqliteIndex>>| async move {
+                let key = urlencoding::decode(&keyword).unwrap();
+                log::info!("lookup: {:?}", key);
+                let mut no_result = true;
+                let mut mdict_contents = Vec::new();
+                for (i, dict) in mdict.iter().enumerate() {
+                    let result = dict.lookup_word(&key).await;
+                    let contents = match result {
+                        Ok(result) => result,
+                        Err(e) => {
+                            if e.kind() != std::io::ErrorKind::NotFound {
+                                log::error!("lookup {} failed : {}", key, e);
                             }
-                            None => format!(r#"{}="/{}/{}""#,&link[1], i, &link[3])
-                        }
+                            continue;
+                        },
+                    };
+                    no_result = false;
+                    let contents = contents.into_iter().map(|s| fix_content(s, i) ).collect();
+                    mdict_contents.push(MDictContent{
+                        title: dict.header.attrs.get("Title").unwrap_or(&"Unknown dictionary".to_string()).to_owned(),
+                        index: i,
+                        contents
                     });
-                let content = Regex::new("@@@LINK=([\\w\\s]+)").unwrap().replace_all(
-                    &content,
-                    |link: &regex::Captures| {
-                        format!(
-                            "<a href=\"/{}\" >See also: {}</a>",
-                            &link[1], &link[1]
-                        )
-                    },
-                );
-                write!(body, r#"<div id="mdict_rs_{}">{}</div>"#,i,content).unwrap();
-            }
-            if no_result {
-                return Err(warp::reject::not_found())
-            }
-            body.push_str(r#"</body><script>"#);
-            body.push_str(MDICT_JS);
-            body.push_str(r#"</script></html>"#);
-            Ok(warp::reply::html(body))
-        },
-    );
-    let routes = warp::get().and(mdict_server).or(files).or(lookup).with(log);
-    warp::serve(routes).run(([0, 0, 0, 0], 8080)).await;
+                }
+                let mdict_contents = MDictContents { mdict_contents };
+                let mut tt = TinyTemplate::new();
+                tt.set_default_formatter(&tinytemplate::format_unescaped);
+                tt.add_template("result", MDICT_RESULT_HTML).expect("failed to add template for result");
+                let body = format!("{}", tt.render("result", &mdict_contents).unwrap());
+                if no_result {
+                    return Err(warp::reject::not_found())
+                }
+                Ok(warp::reply::html(body))
+            },
+        );
+    let routes = warp::get().and(files).or(static_files).or(mdict_server).or(lookup).with(log);
+    warp::serve(routes).run(([0, 0, 0, 0], server_port)).await;
 }
 
 // from flask-mdict

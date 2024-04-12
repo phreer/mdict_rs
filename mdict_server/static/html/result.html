@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Phree's dict</title>
+  <link href="static/css/bootstrap.min.css" rel="stylesheet" crossorigin="anonymous">
+</head>
+
+<body>
+  <main class="container">
+  {{ for dict_content in mdict_contents }}
+  <div id="mdict_rs_{ dict_content.index }">
+    <h1 class="mt-4"> { dict_content.title } </h1>
+    {{ for content in dict_content.contents }}
+    <div id="mdict_rs_sub_{ @index }">
+      {content}
+    </div>
+    {{ endfor }}
+  </div>
+  <hr class="my-4">
+  {{ endfor }}
+  </main>
+</body>
+
+<script src="static/js/bootstrap.bundle.min.js" crossorigin="anonymous"></script>
+<script src="static/js/mdict.js"></script> 
+</html>

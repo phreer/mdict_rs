@@ -33,7 +33,7 @@ async fn main() {
                     let key = urlencoding::decode(path).unwrap();
                     let result = mdict.lookup_word(&key).await;
                     result.map(|opt| {
-                        let string = Regex::new("(entry|sound):/").unwrap().replace_all(&opt, "");
+                        let string = Regex::new("(entry|sound):/").unwrap().replace_all(&opt[0], "");
                         let string = Regex::new("@@@LINK=([\\w]+)").unwrap().replace_all(
                             &string,
                             |link: &regex::Captures| {
@@ -48,7 +48,7 @@ async fn main() {
             match lookup {
                 Ok(data) => Ok(Response::builder()
                     .header("content-type", content_type.to_string())
-                    .body(data)
+                    .body(data.to_vec())
                     .unwrap()),
                 Err(e) => {
                     if e.kind() != std::io::ErrorKind::NotFound {

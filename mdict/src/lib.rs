@@ -588,6 +588,7 @@ impl<R: Read + Seek> MDictIndex<R> {
         &mut self,
     ) -> io::Result<(Vec<MDictRecordBlockIndex>, Vec<(String, MDictRecordIndex)>)> {
         self.file.seek(io::SeekFrom::Start(self.key_block_offset))?;
+        info!("key block offset = {}", self.key_block_offset);
         // read keywords block is done in `read_keys`, this function is actually read record block index.
         let keys = self.read_keys()?;
         let header_size = match self.header.version() {
@@ -647,7 +648,7 @@ impl<R: Read + Seek> MDictIndex<R> {
                     Some((_, next_offset)) => *next_offset,
                     None => next_uncomp_offset,
                 };
-                let len = end.max(next_uncomp_offset) - o;
+                let len = end - o;
                 let index = MDictRecordIndex {
                     block: bi as u32,
                     offset: offset as u32,
@@ -791,11 +792,11 @@ fn read_len<R: Read>(reader: &mut R, len: usize) -> io::Result<Vec<u8>> {
 }
 
 #[cfg(feature = "async")]
-use tokio::{io::AsyncSeek, prelude::*};
+use tokio::io::{AsyncSeekExt, AsyncReadExt};
 
 #[cfg(feature = "async")]
 // read len bytes from this reader and return it as `Vec<u8>`
-async fn read_len_async<R: AsyncRead + Unpin>(reader: &mut R, len: usize) -> io::Result<Vec<u8>> {
+async fn read_len_async<R: AsyncReadExt + Unpin>(reader: &mut R, len: usize) -> io::Result<Vec<u8>> {
     let mut buf = Vec::with_capacity(len);
     reader.take(len as u64).read_to_end(&mut buf).await?;
     Ok(buf)
@@ -853,7 +854,7 @@ pub async fn lookup<AR>(
     block: &MDictRecordBlockIndex,
 ) -> io::Result<Bytes>
 where
-    AR: AsyncRead + AsyncSeek + Unpin,
+    AR: AsyncReadExt + AsyncSeekExt + Unpin,
 {
     reader.seek(io::SeekFrom::Start(block.offset)).await?;
     let compressed = read_len_async(&mut reader, block.comp_size as usize).await?;
